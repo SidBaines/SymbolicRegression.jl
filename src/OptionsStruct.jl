@@ -112,6 +112,7 @@ struct Options{
     deterministic::Bool
     define_helper_functions::Bool
     use_recorder::Bool
+    loss_penalties::Vector{Tuple{Function,Union{Float64,Nothing}}}
 end
 
 function Base.print(io::IO, options::Options)

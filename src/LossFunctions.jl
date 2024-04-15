@@ -101,13 +101,20 @@ function eval_loss(
     regularization::Bool=true,
     idx=nothing,
 )::L where {T<:DATA_TYPE,L<:LOSS_TYPE}
-    loss_val = if options.loss_function === nothing
-        _eval_loss(tree, dataset, options, regularization, idx)
+    loss_val = 0
+    
+    if options.loss_function === nothing
+        loss_val += _eval_loss(tree, dataset, options, regularization, idx)
     else
         f = options.loss_function::Function
-        evaluator(f, tree, dataset, options, idx)
+        loss_val += evaluator(f, tree, dataset, options, idx)
     end
-
+    for penalty in options.loss_penalties
+        pen_val = isnothing(penalty[2]) ? 1 : penalty[2]
+        if penalty[1](tree,options)
+            loss_val += pen_val
+        end
+    end
     return loss_val
 end
 

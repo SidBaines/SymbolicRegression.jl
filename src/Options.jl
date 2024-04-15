@@ -360,6 +360,11 @@ const OPTION_DESCRIPTIONS = """- `binary_operators`: Vector of binary operators 
     in serial mode.
 - `define_helper_functions`: Whether to define helper functions
     for constructing and evaluating trees.
+- `loss_penalties`: A vector of 2-tuples containing penalties to be applied to force certain constraints on the tree.
+    Each tuple will be of the form (function, penalty) where the penalty is either a float64 or Nothing (in which case a 
+    default penalty of 1 will be applied to the loss). If the function, when evaluated on a tree, returns true, then the 
+    penalty will be added on to the loss term; thus the funciton should evaluate to false on 'good' trees. function must be 
+    of the form function(tree::Node)::Bool.
 """
 
 """
@@ -445,6 +450,8 @@ function Options end
     fast_cycle::Bool=false,
     npopulations::Union{Nothing,Integer}=nothing,
     npop::Union{Nothing,Integer}=nothing,
+    # loss_penalties::Vector{Tuple{Function,Union{Float64,Nothing}}}=[],
+    loss_penalties=[],
     kws...,
 )
     for k in keys(kws)
@@ -833,6 +840,7 @@ function Options end
         deterministic,
         define_helper_functions,
         use_recorder,
+        loss_penalties,
     )
 
     return options
