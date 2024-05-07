@@ -35,9 +35,10 @@ function _compute_complexity(
     variable_complexity = cmap.variable_complexity
     unaop_complexities = cmap.unaop_complexities
     binop_complexities = cmap.binop_complexities
+    anyop_complexities = cmap.anyop_complexities
     return tree_mapreduce(
         t -> t.constant ? constant_complexity : variable_complexity,
-        t -> t.degree == 1 ? unaop_complexities[t.op] : binop_complexities[t.op],
+        t -> t.degree == 1 ? unaop_complexities[t.op] : (t.degree == 2 ? binop_complexities[t.op] : anyop_complexities[t.op]),
         +,
         tree,
         CT;

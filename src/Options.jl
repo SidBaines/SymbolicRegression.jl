@@ -36,15 +36,19 @@ using ..UtilsModule: max_ops, @save_kwargs
 Build constraints on operator-level complexity from a user-passed dict.
 """
 function build_constraints(
-    una_constraints, bin_constraints, unary_operators, binary_operators, nuna, nbin
-)::Tuple{Array{Int,1},Array{Tuple{Int,Int},1}}
+    una_constraints, bin_constraints, any_constraints, unary_operators, binary_operators, anyary_operators, nuna, nbin, nany
+)::Tuple{Array{Int,1},Array{Tuple{Int,Int},1},Array{Tuple{Vararg{Int}},1}}
     # Expect format ((*)=>(-1, 3)), etc.
     # TODO: Need to disable simplification if (*, -, +, /) are constrained?
     #  Or, just quit simplification is constraints violated.
 
+    is_any_constraints_already_done = typeof(any_constraints) <: Array{Tuple{Vararg{Int}},1}
     is_bin_constraints_already_done = typeof(bin_constraints) <: Array{Tuple{Int,Int},1}
     is_una_constraints_already_done = typeof(una_constraints) <: Array{Int,1}
 
+    if typeof(any_constraints) <: Array && !is_any_constraints_already_done
+        any_constraints = Dict(any_constraints)
+    end
     if typeof(bin_constraints) <: Array && !is_bin_constraints_already_done
         bin_constraints = Dict(bin_constraints)
     end
@@ -84,8 +88,33 @@ function build_constraints(
         end
         bin_constraints = _bin_constraints
     end
+    if any_constraints === nothing
+        any_constraints = [(-1 for _ in op.arity) for op in anyary_operators]
+    elseif !is_any_constraints_already_done
+        any_constraints::Dict
+        _any_constraints = Tuple{Vararg{Int}}[]
+        for (i, op) in enumerate(anyary_operators)
+            did_user_declare_constraints = haskey(any_constraints, op)
+            if did_user_declare_constraints
+                constraint::Tuple{Vararg{Int}} = any_constraints[op]
+                push!(_any_constraints, constraint)
+            else
+                push!(_any_constraints, (-1 for _ in op.arity))
+            end
+        end
+        any_constraints = _any_constraints
+    end
 
-    return una_constraints, bin_constraints
+    return una_constraints, bin_constraints, any_constraints
+end
+
+
+#TODO should we force a type in here? It would be a FuncArityPair from DynamicExpressions.UtilsModule
+function anyopmap(op)
+    return op
+end
+function inverse_anyopmap(op)
+    return op
 end
 
 function binopmap(op::F) where {F}
@@ -187,6 +216,7 @@ const OPTION_DESCRIPTIONS = """- `binary_operators`: Vector of binary operators 
     operator so it takes arbitrary types.
 - `unary_operators`: Same, but for
     unary operators (one input scalar, gives an output scalar).
+- `anyary_operators`: TODO
 - `constraints`: Array of pairs specifying size constraints
     for each operator. The constraints for a binary operator should be a 2-tuple
     (e.g., `(-1, -1)`) and the constraints for a unary operator should be an `Int`.
@@ -334,6 +364,7 @@ const OPTION_DESCRIPTIONS = """- `binary_operators`: Vector of binary operators 
 - `print_precision`: How many digits to print when printing
     equations. By default, this is 5.
 - `save_to_file`: Whether to save equations to a file during the search.
+- `any_operators`: TODO
 - `bin_constraints`: See `constraints`. This is the same, but specified for binary
     operators only (for example, if you have an operator that is both a binary
     and unary operator).
@@ -374,6 +405,7 @@ $(OPTION_DESCRIPTIONS)
 """
 function Options end
 @save_kwargs DEFAULT_OPTIONS function Options(;
+    anyary_operators=[],
     binary_operators=[+, -, /, *],
     unary_operators=[],
     constraints=nothing,
@@ -418,6 +450,7 @@ function Options end
     save_to_file::Bool=true,
     probability_negate_constant::Real=0.01,
     seed=nothing,
+    any_constraints=nothing,
     bin_constraints=nothing,
     una_constraints=nothing,
     progress::Union{Bool,Nothing}=nothing,
@@ -540,6 +573,7 @@ function Options end
             loss_function === nothing &&
             nested_constraints === nothing &&
             constraints === nothing &&
+            any_constraints === nothing &&
             bin_constraints === nothing &&
             una_constraints === nothing
         )
@@ -553,17 +587,31 @@ function Options end
 
     nuna = length(unary_operators)
     nbin = length(binary_operators)
+    nany = length(anyary_operators)
     @assert maxsize > 3
     @assert warmup_maxsize_by >= 0.0f0
-    @assert nuna <= max_ops && nbin <= max_ops
+    @assert nuna <= max_ops && nbin <= max_ops && nany <= max_ops
 
     # Make sure nested_constraints contains functions within our operator set:
     if nested_constraints !== nothing
-        # Check that intersection of binary operators and unary operators is empty:
+        # Check that pairwise intersection of multinary/binary/unary operators is empty:
         for op in binary_operators
             if op ∈ unary_operators
                 error(
                     "Operator $(op) is both a binary and unary operator. " *
+                    "You can't use nested constraints.",
+                )
+            end
+        end
+        for op in anyary_operators
+            if op.func ∈ unary_operators
+                error(
+                    "Operator $(op.func) is both a unary and anyary operator. " *
+                    "You can't use nested constraints.",
+                )
+            elseif op.func ∈ binary_operators
+                error(
+                    "Operator $(op.func) is both a binary and anyary operator. " *
                     "You can't use nested constraints.",
                 )
             end
@@ -577,14 +625,14 @@ function Options end
             )
         end
         for (op, nested_constraint) in nested_constraints
-            if !(op ∈ binary_operators || op ∈ unary_operators)
+            if !(op ∈ anyary_operators || op ∈ binary_operators || op ∈ unary_operators)
                 error("Operator $(op) is not in the operator set.")
             end
             for (nested_op, max_nesting) in nested_constraint
-                if !(nested_op ∈ binary_operators || nested_op ∈ unary_operators)
+                if !(nested_op ∈ anyary_operators || nested_op ∈ binary_operators || nested_op ∈ unary_operators)
                     error("Operator $(nested_op) is not in the operator set.")
                 end
-                @assert nested_op ∈ binary_operators || nested_op ∈ unary_operators
+                @assert nested_op ∈ anyary_operators || nested_op ∈ binary_operators || nested_op ∈ unary_operators
                 @assert max_nesting >= -1 && typeof(max_nesting) <: Int
             end
         end
@@ -595,16 +643,20 @@ function Options end
         for (op, nested_constraint) in nested_constraints
             (degree, idx) = if op ∈ binary_operators
                 2, findfirst(isequal(op), binary_operators)
-            else
+            elseif op ∈ unary_operators
                 1, findfirst(isequal(op), unary_operators)
+            else
+                3, findfirst(isequal(op), anyary_operators)
             end
             new_max_nesting_dict = []
             # Dict()
             for (nested_op, max_nesting) in nested_constraint
                 (nested_degree, nested_idx) = if nested_op ∈ binary_operators
                     2, findfirst(isequal(nested_op), binary_operators)
-                else
+                elseif nested_op ∈ unary_operators
                     1, findfirst(isequal(nested_op), unary_operators)
+                else
+                    3, findfirst(isequal(nested_op), anyary_operators)
                 end
                 # new_max_nesting_dict[(nested_degree, nested_idx)] = max_nesting
                 push!(new_max_nesting_dict, (nested_degree, nested_idx, max_nesting))
@@ -619,21 +671,29 @@ function Options end
         constraints = collect(constraints)
     end
     if constraints !== nothing
+        @assert any_constraints === nothing
         @assert bin_constraints === nothing
         @assert una_constraints === nothing
         # TODO: This is redundant with the checks in equation_search
+        for op in anyary_operators
+            @assert !(op.func in binary_operators)
+            @assert !(op.func in unary_operators)
+        end
         for op in binary_operators
             @assert !(op in unary_operators)
+            @assert !(op in anyary_operators)
         end
         for op in unary_operators
             @assert !(op in binary_operators)
+            @assert !(op in anyary_operators)
         end
+        any_constraints = constraints
         bin_constraints = constraints
         una_constraints = constraints
     end
 
-    una_constraints, bin_constraints = build_constraints(
-        una_constraints, bin_constraints, unary_operators, binary_operators, nuna, nbin
+    una_constraints, bin_constraints, any_constraints = build_constraints(
+        una_constraints, bin_constraints, any_constraints, unary_operators, binary_operators, anyary_operators, nuna, nbin, nany
     )
 
     # Define the complexities of everything.
@@ -666,6 +726,10 @@ function Options end
         )
 
         # If not in dict, then just set it to 1.
+        anyop_complexities = promoted_type[
+            (haskey(complexity_of_operators, op) ? complexity_of_operators[op] : 1) #
+            for op in anyary_operators
+        ]
         binop_complexities = promoted_type[
             (haskey(complexity_of_operators, op) ? complexity_of_operators[op] : 1) #
             for op in binary_operators
@@ -683,6 +747,7 @@ function Options end
         )
 
         ComplexityMapping(;
+            anyop_complexities=anyop_complexities,
             binop_complexities=binop_complexities,
             unaop_complexities=unaop_complexities,
             variable_complexity=variable_complexity,
@@ -702,6 +767,7 @@ function Options end
         # are correctly overloaded, rather than overloading
         # operators like "safe_pow", etc.
         OperatorEnum(;
+            anyary_operators=anyary_operators,
             binary_operators=binary_operators,
             unary_operators=unary_operators,
             define_helper_functions=true,
@@ -709,10 +775,12 @@ function Options end
         )
     end
 
+    anyary_operators = map(anyopmap, anyary_operators)
     binary_operators = map(binopmap, binary_operators)
     unary_operators = map(unaopmap, unary_operators)
 
     operators = OperatorEnum(;
+        anyary_operators=anyary_operators,
         binary_operators=binary_operators,
         unary_operators=unary_operators,
         define_helper_functions=define_helper_functions,
@@ -772,6 +840,7 @@ function Options end
         typeof(tournament_selection_weights),
     }(
         operators,
+        any_constraints,
         bin_constraints,
         una_constraints,
         complexity_mapping,
@@ -812,6 +881,7 @@ function Options end
         probability_negate_constant,
         nuna,
         nbin,
+        nany,
         seed,
         elementwise_loss,
         loss_function,

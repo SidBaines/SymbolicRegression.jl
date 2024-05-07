@@ -7,7 +7,7 @@ using DynamicExpressions:
 using DynamicExpressions.StringsModule: needs_brackets
 using DynamicQuantities: dimension, ustrip
 using ..CoreModule: Options
-using ..CoreModule.OptionsModule: inverse_binopmap, inverse_unaopmap
+using ..CoreModule.OptionsModule: inverse_anyopmap, inverse_binopmap, inverse_unaopmap
 using ..UtilsModule: subscriptify
 
 import DynamicExpressions:
@@ -35,8 +35,10 @@ function eval(current_node)
         return current_node.value
     elif current_node is degree 1
         return current_node.operator(eval(current_node.left_child))
-    else
+    elseif current_node is degree 2
         return current_node.operator(eval(current_node.left_child), eval(current_node.right_child))
+    else
+        return current_node.operator((eval(child) for child in current_node.children)...)
 ```
 The bulk of the code is for optimizations and pre-emptive NaN/Inf checks,
 which speed up evaluation significantly.
@@ -286,6 +288,7 @@ function define_alias_operators(operators)
     # `safe_pow(x1, 1.5)`. They can use `x1 ^ 1.5` instead.
     constructor = isa(operators, OperatorEnum) ? OperatorEnum : GenericOperatorEnum
     return constructor(;
+        anyary_operators=inverse_anyopmap.(operators.anyops),
         binary_operators=inverse_binopmap.(operators.binops),
         unary_operators=inverse_unaopmap.(operators.unaops),
         define_helper_functions=false,

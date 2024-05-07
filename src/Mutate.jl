@@ -52,7 +52,7 @@ function condition_mutation_weights!(
         return nothing
     end
 
-    if !any(node -> node.degree == 2, member.tree)
+    if !any(node -> node.degree > 1, member.tree)
         # swap is implemented only for binary ops
         weights.swap_operands = 0.0
     end

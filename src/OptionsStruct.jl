@@ -10,6 +10,7 @@ import ..MutationWeightsModule: MutationWeights
 """This struct defines how complexity is calculated."""
 struct ComplexityMapping{T<:Real}
     use::Bool  # Whether we use custom complexity, or just use 1 for everythign.
+    anyop_complexities::Vector{T}  # Complexity of each arbitrary arity operator.
     binop_complexities::Vector{T}  # Complexity of each binary operator.
     unaop_complexities::Vector{T}  # Complexity of each unary operator.
     variable_complexity::T  # Complexity of using a variable.
@@ -19,19 +20,21 @@ end
 Base.eltype(::ComplexityMapping{T}) where {T} = T
 
 function ComplexityMapping(use::Bool)
-    return ComplexityMapping{Int}(use, zeros(Int, 0), zeros(Int, 0), 1, 1)
+    return ComplexityMapping{Int}(use, zeros(Int, 0), zeros(Int, 0), zeros(Int, 0), 1, 1)
 end
 
 """Promote type when defining complexity mapping."""
 function ComplexityMapping(;
+    anyop_complexities::Vector{T0},
     binop_complexities::Vector{T1},
     unaop_complexities::Vector{T2},
     variable_complexity::T3,
     constant_complexity::T4,
-) where {T1<:Real,T2<:Real,T3<:Real,T4<:Real}
-    promoted_T = promote_type(T1, T2, T3, T4)
+) where {T0<:Real,T1<:Real,T2<:Real,T3<:Real,T4<:Real}
+    promoted_T = promote_type(T0, T1, T2, T3, T4)
     return ComplexityMapping{promoted_T}(
         true,
+        anyop_complexities,
         binop_complexities,
         unaop_complexities,
         variable_complexity,
@@ -51,6 +54,7 @@ struct Options{
     CT,OP<:AbstractOperatorEnum,N<:AbstractExpressionNode,_turbo,_bumper,_return_state,W
 }
     operators::OP
+    any_constraints::Vector{Tuple{Vararg{Int}}}
     bin_constraints::Vector{Tuple{Int,Int}}
     una_constraints::Vector{Int}
     complexity_mapping::ComplexityMapping{CT}
@@ -91,6 +95,7 @@ struct Options{
     probability_negate_constant::Float32
     nuna::Int
     nbin::Int
+    nany::Int
     seed::Union{Int,Nothing}
     elementwise_loss::Union{SupervisedLoss,Function}
     loss_function::Union{Nothing,Function}
@@ -118,6 +123,7 @@ function Base.print(io::IO, options::Options)
     return print(
         io,
         "Options(" *
+        "anyops=$(options.operators.anyops), " *
         "binops=$(options.operators.binops), " *
         "unaops=$(options.operators.unaops), "
         # Fill in remaining fields automatically:
@@ -129,7 +135,7 @@ function Base.print(io::IO, options::Options)
                 else
                     "$(fieldname)=$(getfield(options, fieldname))"
                 end for
-                fieldname in fieldnames(Options) if fieldname ∉ [:operators, :nuna, :nbin]
+                fieldname in fieldnames(Options) if fieldname ∉ [:operators, :nuna, :nbin, :nany]
             ],
             ", ",
         ) *

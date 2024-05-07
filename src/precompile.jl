@@ -42,6 +42,7 @@ function do_precompilation(::Val{mode}) where {mode}
             y = start ? randn(T, N) : randn(T, nout, N)
             @maybe_compile_workload mode begin
                 options = SymbolicRegression.Options(;
+                    anyary_operators=[],
                     binary_operators=[+, *, /, -, ^],
                     unary_operators=[sin, cos, exp, log, sqrt, abs],
                     populations=3,

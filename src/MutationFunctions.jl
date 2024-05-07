@@ -1,6 +1,6 @@
 module MutationFunctionsModule
 
-using Random: default_rng, AbstractRNG
+using Random: default_rng, AbstractRNG, shuffle
 using DynamicExpressions:
     AbstractExpressionNode,
     AbstractNode,
@@ -32,11 +32,12 @@ end
 
 """Swap operands in binary operator for ops like pow and divide"""
 function swap_operands(tree::AbstractNode, rng::AbstractRNG=default_rng())
-    if !any(node -> node.degree == 2, tree)
+    if !any(node -> node.degree > 1, tree)
         return tree
     end
-    node = rand(rng, NodeSampler(; tree, filter=t -> t.degree == 2))
-    node.l, node.r = node.r, node.l
+    node = rand(rng, NodeSampler(; tree, filter=t -> t.degree > 1))
+    perm = shuffle(rng,1:node.degree)
+    node.children = [node.children[i] for i in perm]
     return tree
 end
 
@@ -50,8 +51,10 @@ function mutate_operator(
     node = rand(rng, NodeSampler(; tree, filter=t -> t.degree != 0))
     if node.degree == 1
         node.op = rand(rng, 1:(options.nuna))
-    else
+    elseif node.degree == 2
         node.op = rand(rng, 1:(options.nbin))
+    else
+        node.op = rand(rng, 1:(options.nany))
     end
     return tree
 end
@@ -94,24 +97,31 @@ function append_random_op(
     options::Options,
     nfeatures::Int,
     rng::AbstractRNG=default_rng();
-    makeNewBinOp::Union{Bool,Nothing}=nothing,
+    maxOperatorDegree::Union{UInt,Nothing}=nothing,
 ) where {T<:DATA_TYPE}
     node = rand(rng, NodeSampler(; tree, filter=t -> t.degree == 0))
 
-    if makeNewBinOp === nothing
-        choice = rand(rng)
-        makeNewBinOp = choice < options.nbin / (options.nuna + options.nbin)
+    if maxOperatorDegree === nothing
+        ch = rand(1:sum([options.nuna, options.nbin, options.nany]))
+        typeOfNewOp = findfirst(cumsum([options.nuna, options.nbin, options.nany]).>=ch)
     end
 
-    if makeNewBinOp
+    if typeOfNewOp==1
+        newnode = constructorof(typeof(tree))(
+            rand(rng, 1:(options.nuna)), make_random_leaf(nfeatures, T, typeof(tree), rng)
+        )
+    elseif typeOfNewOp==2
         newnode = constructorof(typeof(tree))(
             rand(rng, 1:(options.nbin)),
             make_random_leaf(nfeatures, T, typeof(tree), rng),
             make_random_leaf(nfeatures, T, typeof(tree), rng),
         )
     else
+        choice = rand(rng,1:(options.nany))
+        arity=options.operators.anynops[choice].arity
         newnode = constructorof(typeof(tree))(
-            rand(rng, 1:(options.nuna)), make_random_leaf(nfeatures, T, typeof(tree), rng)
+            choice,
+            [make_random_leaf(nfeatures, T, typeof(tree), rng) for i = 1:arity],
         )
     end
 
@@ -128,15 +138,21 @@ function insert_random_op(
     rng::AbstractRNG=default_rng(),
 ) where {T<:DATA_TYPE}
     node = rand(rng, NodeSampler(; tree))
-    choice = rand(rng)
-    makeNewBinOp = choice < options.nbin / (options.nuna + options.nbin)
+    ch = rand(1:sum([options.nuna, options.nbin, options.nany]))
+    typeOfNewOp = findfirst(cumsum([options.nuna, options.nbin, options.nany]).>=ch)
     left = copy_node(node)
 
-    if makeNewBinOp
+    if typeOfNewOp == 1
+        newnode = constructorof(typeof(tree))(rand(rng, 1:(options.nuna)), left)
+    elseif typeOfNewOp == 2
         right = make_random_leaf(nfeatures, T, typeof(tree), rng)
         newnode = constructorof(typeof(tree))(rand(rng, 1:(options.nbin)), left, right)
     else
-        newnode = constructorof(typeof(tree))(rand(rng, 1:(options.nuna)), left)
+        choice = rand(rng, 1:(options.nany))
+        arity = options.operators.anyops[choice].arity
+        pos_of_old_node = rand(rng, 1:arity)
+        children = [(pos_of_old_node == n) ? left : make_random_leaf(nfeatures, T, typeof(tree), rng) for n in 1:arity]
+        newnode = constructorof(typeof(tree))(choice, children)
     end
     set_node!(node, newnode)
     return tree
@@ -150,15 +166,20 @@ function prepend_random_op(
     rng::AbstractRNG=default_rng(),
 ) where {T<:DATA_TYPE}
     node = tree
-    choice = rand(rng)
-    makeNewBinOp = choice < options.nbin / (options.nuna + options.nbin)
+    ch = rand(1:sum([options.nuna, options.nbin, options.nany]))
+    typeOfNewOp = findfirst(cumsum([options.nuna, options.nbin, options.nany]).>=ch)
     left = copy_node(tree)
 
-    if makeNewBinOp
+    if typeOfNewOp == 1
+        newnode = constructorof(typeof(tree))(rand(rng, 1:(options.nuna)), left)
+    elseif typeOfNewOp == 2
         right = make_random_leaf(nfeatures, T, typeof(tree), rng)
         newnode = constructorof(typeof(tree))(rand(rng, 1:(options.nbin)), left, right)
     else
-        newnode = constructorof(typeof(tree))(rand(rng, 1:(options.nuna)), left)
+        choice = rand(rng, 1:(options.nany))
+        arity = options.operators.anyops[choice].arity
+        children = [(n == 1) ? left : make_random_leaf(nfeatures, T, typeof(tree), rng) for n in 1:arity]
+        newnode = constructorof(typeof(tree))(choice, children)
     end
     set_node!(node, newnode)
     return node
@@ -174,17 +195,14 @@ function make_random_leaf(
     end
 end
 
-"""Return a random node from the tree with parent, and side ('n' for no parent)"""
+"""Return a random node from the tree with parent, and the index of the node in the parent's list of children (-1 for no parent)"""
 function random_node_and_parent(tree::AbstractNode, rng::AbstractRNG=default_rng())
     if tree.degree == 0
-        return tree, tree, 'n'
+        return tree, tree, -1
     end
     parent = rand(rng, NodeSampler(; tree, filter=t -> t.degree != 0))
-    if parent.degree == 1 || rand(rng, Bool)
-        return (parent.l, parent, 'l')
-    else
-        return (parent.r, parent, 'r')
-    end
+    idx = rand(rng, 1:length(parent.children))
+    return (parent.children[idx], parent, idx)
 end
 
 """Select a random node, and splice it out of the tree."""
@@ -195,7 +213,7 @@ function delete_random_op!(
     rng::AbstractRNG=default_rng(),
 ) where {T<:DATA_TYPE}
     node, parent, side = random_node_and_parent(tree, rng)
-    isroot = side == 'n'
+    isroot = side == -1
 
     if node.degree == 0
         # Replace with new constant
@@ -204,30 +222,20 @@ function delete_random_op!(
     elseif node.degree == 1
         # Join one of the children with the parent
         if isroot
-            return node.l
-        elseif parent.l == node
-            parent.l = node.l
+            return node.children[1]
         else
-            parent.r = node.l
+            # TODO this seems like a mess, can we make it better (may involve refactoring whole function)? I think this originally had to look like this because it's possible a parent has multiple identical children (eg. a tree that looks like '(1 + (x^x)', we might want to merge either x)
+            prt_ch_change = rand(rng, findall(t->t==node, parent.children)) # The index of the parents children (necessary for the case where parent has multiple identical children) that we'll merge
+            parent.children = [i!=prt_ch_change ? parent.children[i] : parent.children[i].children[1] for i in 1:length(parent.children)]
         end
     else
         # Join one of the children with the parent
-        if rand(rng, Bool)
-            if isroot
-                return node.l
-            elseif parent.l == node
-                parent.l = node.l
-            else
-                parent.r = node.l
-            end
+        node_ch_change = rand(rng, 1:length(node.children)) # The index of the childs children that we'll merge
+        if isroot
+            return node.children[node_ch_change]
         else
-            if isroot
-                return node.r
-            elseif parent.l == node
-                parent.l = node.r
-            else
-                parent.r = node.r
-            end
+            prt_ch_change = rand(rng, findall(t->t==node, parent.children)) # The index of the parents children (necessary for the case where parent has multiple identical children) that we'll merge
+            parent.children = [i!=prt_ch_change ? parent.children[i] : parent.children[i].children[node_ch_change] for i in 1:length(parent.children)]
         end
     end
     return tree
@@ -256,12 +264,25 @@ function gen_random_tree_fixed_size(
     tree = make_random_leaf(nfeatures, T, options.node_type, rng)
     cur_size = count_nodes(tree)
     while cur_size < node_count
-        if cur_size == node_count - 1  # only unary operator allowed.
-            options.nuna == 0 && break # We will go over the requested amount, so we must break.
-            tree = append_random_op(tree, options, nfeatures, rng; makeNewBinOp=false)
-        else
-            tree = append_random_op(tree, options, nfeatures, rng)
+        maxOperatorDegree=cur_size-node_count
+        canFindOps = false # Check if there are any operators with max arity or less, if this doesn't become true will go over the requested amount, so we must break.
+        if maxOperatorDegree <= 0
         end
+        if maxOperatorDegree >= 1
+            canFindOps = options.nuna != 0
+        end
+        if maxOperatorDegree >= 2
+            canFindOps = canFindOps || (options.nbin != 0)
+        end
+        if maxOperatorDegree >= 3
+            for op in options.operators.anyops
+                if op.arity <= maxOperatorDegree
+                    canFindOps = true
+                end
+            end
+        end
+        (!canFindOps) && break
+        tree = append_random_op(tree, options, nfeatures, rng; maxOperatorDegree=maxOperatorDegree)
         cur_size = count_nodes(tree)
     end
     return tree
@@ -281,23 +302,19 @@ function crossover_trees(
 
     node1 = copy_node(node1)
 
-    if side1 == 'l'
-        parent1.l = copy_node(node2)
-        # tree1 now contains this.
-    elseif side1 == 'r'
-        parent1.r = copy_node(node2)
+
+    if side1 >= 1
+        parent1.children = [(side1 != n) ? parent1.children[n] : copy_node(node2) for n in 1:length(parent1.children)]
         # tree1 now contains this.
     else # 'n'
         # This means that there is no parent2.
         tree1 = copy_node(node2)
     end
 
-    if side2 == 'l'
-        parent2.l = node1
-    elseif side2 == 'r'
-        parent2.r = node1
+    if side2 >= 1
+        parent2.children = [(side2 != n) ? parent2.children[n] : copy_node(node1) for n in 1:length(parent2.children)]
     else # 'n'
-        tree2 = node1
+        tree2 = copy_node(node1)
     end
     return tree1, tree2
 end
@@ -327,16 +344,29 @@ function form_random_connection!(tree::AbstractNode, rng::AbstractRNG=default_rn
         return tree
     end
     # Set one of the children to be this new child:
-    side = (parent.degree == 1 || rand(rng, Bool)) ? :l : :r
-    setproperty!(parent, side, new_child)
+    if parent.degree <= 2
+        side = (parent.degree == 1 || rand(rng, Bool)) ? :l : :r
+        setproperty!(parent, side, new_child)
+    else
+        # TODO Check if this is correctly translated into the arbitrary arity case?
+        side = rand(rng, 1:parent.degree)
+        parent.children[side] = new_child
+    end
     return tree
 end
 function break_random_connection!(tree::AbstractNode, rng::AbstractRNG=default_rng())
     tree.degree == 0 && return tree
     parent = rand(rng, NodeSampler(; tree, filter=t -> t.degree != 0))
-    side = (parent.degree == 1 || rand(rng, Bool)) ? :l : :r
-    unshared_child = copy(getproperty(parent, side))
-    setproperty!(parent, side, unshared_child)
+    if parent.degree <= 2
+        side = (parent.degree == 1 || rand(rng, Bool)) ? :l : :r
+        unshared_child = copy(getproperty(parent, side))
+        setproperty!(parent, side, unshared_child)
+    else
+        # TODO Check if this is correctly translated into the arbitrary arity case?
+        side = rand(rng, 1:parent.degree)
+        unshared_child = copy(parent.children[side])
+        parent.children[side] = unshared_child
+    end
     return tree
 end
 

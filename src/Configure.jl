@@ -30,6 +30,7 @@ end
 const TEST_INPUTS = collect(range(-100, 100; length=99))
 
 function assert_operators_well_defined(T, options::Options)
+    # TODO Add tests for any arity operators
     test_input = if T <: Complex
         (x -> convert(T, x)).(TEST_INPUTS .+ TEST_INPUTS .* im)
     else
@@ -69,14 +70,27 @@ function test_option_configuration(
             )
         end
     end
+    for op in options.operators.anyops
+        if is_anonymous_function(op.func)
+            throw(
+                AssertionError(
+                    "Anonymous functions can't be used as operators for SymbolicRegression.jl",
+                ),
+            )
+        end
+    end
 
     assert_operators_well_defined(T, options)
 
-    operator_intersection = intersect(options.operators.binops, options.operators.unaops)
+    operator_intersection = union(
+        intersect(options.operators.anyops, options.operators.binops),
+        intersect(options.operators.binops, options.operators.unaops),
+        intersect(options.operators.unaops, options.operators.anyops)
+    )
     if length(operator_intersection) > 0
         throw(
             AssertionError(
-                "Your configuration is invalid - $(operator_intersection) appear in both the binary operators and unary operators.",
+                "Your configuration is invalid - $(operator_intersection) appear in more than one of {unary, binary, anyary} operators.",
             ),
         )
     end
@@ -117,7 +131,7 @@ function move_functions_to_workers(
 ) where {T}
     # All the types of functions we need to move to workers:
     function_sets = (
-        :unaops, :binops, :elementwise_loss, :early_stop_condition, :loss_function
+        :unaops, :binops, :anyops, :elementwise_loss, :early_stop_condition, :loss_function
     )
 
     for function_set in function_sets
@@ -127,6 +141,9 @@ function move_functions_to_workers(
         elseif function_set == :binops
             ops = options.operators.binops
             example_inputs = (zero(T), zero(T))
+        elseif function_set == :anyops
+            ops = options.operators.anyops.func
+            example_inputs = (zero(T) for _ in 1:options.operators.anyops.arity)
         elseif function_set == :elementwise_loss
             if typeof(options.elementwise_loss) <: SupervisedLoss
                 continue

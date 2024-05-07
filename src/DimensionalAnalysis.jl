@@ -152,6 +152,21 @@ end
         return W(Quantity(op(ustrip(l), ustrip(r))::T), false, false)
     return W(one(Q), false, true)
 end
+@inline function degany_eval( # TODO this seems unoptimised at best, sketchy at worst. Look into it
+    op::F, children::Tuple{Vararg{W}}
+) where {F,T,Q<:AbstractQuantity{T},W<:WildcardQuantity{Q}}
+    for child in children
+        child.violates && return child
+    end
+    if any(child->!(isfinite(child)), children)
+        return W(one(Q), false, true)
+    end
+    static_hasmethod(op, Tuple{Vararg{W}}) && @maybe_return_call(W, op, children)
+    all(child->child.wildcard, children) && return W(Quantity(op(inps...)::T), false, false)
+    inps = (child.wildcard ? ustrip(child) : child for child in children)
+    static_hasmethod(op, typeof(inps)) && @maybe_return_call(W, op, inps)
+    return W(one(Q), false, true)
+end
 
 function violates_dimensional_constraints_dispatch(
     tree::AbstractExpressionNode{T}, x_units::Vector{Q}, x::AbstractVector{T}, operators
@@ -159,12 +174,15 @@ function violates_dimensional_constraints_dispatch(
     if tree.degree == 0
         return deg0_eval(x, x_units, tree)::WildcardQuantity{Q}
     elseif tree.degree == 1
-        l = violates_dimensional_constraints_dispatch(tree.l, x_units, x, operators)
+        l = violates_dimensional_constraints_dispatch(tree.children[1], x_units, x, operators)
         return deg1_eval((@inbounds operators.unaops[tree.op]), l)::WildcardQuantity{Q}
-    else
-        l = violates_dimensional_constraints_dispatch(tree.l, x_units, x, operators)
-        r = violates_dimensional_constraints_dispatch(tree.r, x_units, x, operators)
+    elseif tree.degree == 2
+        l = violates_dimensional_constraints_dispatch(tree.children[1], x_units, x, operators)
+        r = violates_dimensional_constraints_dispatch(tree.children[2], x_units, x, operators)
         return deg2_eval((@inbounds operators.binops[tree.op]), l, r)::WildcardQuantity{Q}
+    else
+        children = (violates_dimensional_constraints_dispatch(child, x_units, x, operators) for child in tree.children)
+        return degany_eval((@inbounds operators.anyops[tree.op].func), children)::WildcardQuantity{Q}
     end
 end
 

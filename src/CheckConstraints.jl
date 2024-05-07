@@ -5,6 +5,24 @@ using ..UtilsModule: vals
 using ..CoreModule: Options
 using ..ComplexityModule: compute_complexity, past_complexity_limit
 
+# Check if any anyary operator are overly complex
+function flag_any_operator_complexity(
+    tree::AbstractExpressionNode, op, cons, options::Options
+)::Bool
+    any(tree) do subtree
+        if subtree.degree > 2 && subtree.op == op
+            cons[1] > -1 &&
+            @assert(length(cons)==length(subtree.children))
+            for cn = eachindex(cons)
+                cons[cn] > -1 &&
+                    past_complexity_limit(subtree.children[cn], options, cons[cn]) &&
+                    return true
+            end
+        end
+        return false
+    end
+end
+
 # Check if any binary operator are overly complex
 function flag_bin_operator_complexity(
     tree::AbstractExpressionNode, op, cons, options::Options
@@ -12,10 +30,10 @@ function flag_bin_operator_complexity(
     any(tree) do subtree
         if subtree.degree == 2 && subtree.op == op
             cons[1] > -1 &&
-                past_complexity_limit(subtree.l, options, cons[1]) &&
+                past_complexity_limit(subtree.children[1], options, cons[1]) &&
                 return true
             cons[2] > -1 &&
-                past_complexity_limit(subtree.r, options, cons[2]) &&
+                past_complexity_limit(subtree.children[2], options, cons[2]) &&
                 return true
         end
         return false
@@ -31,7 +49,7 @@ function flag_una_operator_complexity(
 )::Bool
     any(tree) do subtree
         if subtree.degree == 1 && tree.op == op
-            past_complexity_limit(subtree.l, options, cons) && return true
+            past_complexity_limit(subtree.children[1], options, cons) && return true
         end
         return false
     end
@@ -79,6 +97,11 @@ function check_constraints(
     ((cursize === nothing) ? compute_complexity(tree, options) : cursize) > maxsize &&
         return false
     count_depth(tree) > options.maxdepth && return false
+    for i in 1:(options.nany)
+        cons = options.any_constraints[i]
+        cons == (-1, -1) && continue
+        flag_any_operator_complexity(tree, i, cons, options) && return false
+    end
     for i in 1:(options.nbin)
         cons = options.bin_constraints[i]
         cons == (-1, -1) && continue
