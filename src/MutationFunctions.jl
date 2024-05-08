@@ -118,10 +118,10 @@ function append_random_op(
         )
     else
         choice = rand(rng,1:(options.nany))
-        arity=options.operators.anynops[choice].arity
-        newnode = constructorof(typeof(tree))(
-            choice,
-            [make_random_leaf(nfeatures, T, typeof(tree), rng) for i = 1:arity],
+        arity=options.operators.anyops[choice].arity
+        newnode = constructorof(typeof(tree))(T;
+            op=choice,
+            children=[make_random_leaf(nfeatures, T, typeof(tree), rng) for i = 1:arity],
         )
     end
 
@@ -152,7 +152,7 @@ function insert_random_op(
         arity = options.operators.anyops[choice].arity
         pos_of_old_node = rand(rng, 1:arity)
         children = [(pos_of_old_node == n) ? left : make_random_leaf(nfeatures, T, typeof(tree), rng) for n in 1:arity]
-        newnode = constructorof(typeof(tree))(choice, children)
+        newnode = constructorof(typeof(tree))(T;op=choice, children=children)
     end
     set_node!(node, newnode)
     return tree
@@ -179,7 +179,7 @@ function prepend_random_op(
         choice = rand(rng, 1:(options.nany))
         arity = options.operators.anyops[choice].arity
         children = [(n == 1) ? left : make_random_leaf(nfeatures, T, typeof(tree), rng) for n in 1:arity]
-        newnode = constructorof(typeof(tree))(choice, children)
+        newnode = constructorof(typeof(tree))(T;op=choice, children=children)
     end
     set_node!(node, newnode)
     return node
