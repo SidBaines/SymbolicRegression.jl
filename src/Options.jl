@@ -89,7 +89,7 @@ function build_constraints(
         bin_constraints = _bin_constraints
     end
     if any_constraints === nothing
-        any_constraints = [(-1 for _ in op.arity) for op in anyary_operators]
+        any_constraints = [Tuple(-1 for _ in 1:op.arity) for op in anyary_operators]
     elseif !is_any_constraints_already_done
         any_constraints::Dict
         _any_constraints = Tuple{Vararg{Int}}[]
@@ -99,7 +99,7 @@ function build_constraints(
                 constraint::Tuple{Vararg{Int}} = any_constraints[op]
                 push!(_any_constraints, constraint)
             else
-                push!(_any_constraints, (-1 for _ in op.arity))
+                push!(_any_constraints, Tuple(-1 for _ in 1:op.arity))
             end
         end
         any_constraints = _any_constraints
